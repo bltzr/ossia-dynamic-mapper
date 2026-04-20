@@ -185,6 +185,9 @@ Ossia.Mapper {
         _sel = _sel;
         sendXLTrackLEDs();            // LEDs first — before any potentially slow reads
         Device.write("/mode/track_sel", n);
+        // Open Granola's MIDI gate only on selected track(s), close all others
+        for (var t = 1; t <= 8; t++)
+            Device.write("/midi_gate/" + t, _sel[t-1]);
         if (_selMode) {
             if (_sel[n-1]) initTrackFromScore(n);
         } else {
@@ -740,6 +743,9 @@ Ossia.Mapper {
                             pr = Device.read("/shadow/t1/pitch");
                         if (pr !== null && pr !== undefined && pr > 0)
                             _root._pitchAccum = Math.log(pr) / Math.log(2.5);
+                        // Seed MIDI gates: open only for initially selected tracks
+                        for (var gt = 1; gt <= 8; gt++)
+                            Device.write("/midi_gate/" + gt, _root._sel[gt-1]);
                         _root._initDone = true;
                     }
                     return 0;
@@ -777,6 +783,23 @@ Ossia.Mapper {
                     ]});
                 }
                 return tracks;
+            }()) },
+
+            // ── Granola MIDI gate: open/close per-track MIDI listening ───────
+            { name: "midi_gate", children: (function() {
+                var gates = [];
+                for (var n = 1; n <= 8; n++) {
+                    gates.push((function(tr) {
+                        return {
+                            name: String(tr), type: Ossia.Type.Bool, value: false,
+                            write: function(v) {
+                                return [{ address: _sa(tr, "gran", "listening to midi input?"),
+                                          value: v.value }];
+                            }
+                        };
+                    })(n));
+                }
+                return gates;
             }()) },
 
             // ── Foot pedal — recording toggle on selected tracks ──────────────

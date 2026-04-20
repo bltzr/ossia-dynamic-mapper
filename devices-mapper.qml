@@ -74,6 +74,9 @@ Ossia.Mapper {
     // Per-track recording state (toggled by XL lower row buttons)
     property var _recState: [false,false,false,false,false,false,false,false]
 
+    // Per-pad active state for inmix source selection (toggled on press)
+    property var _padState: [false,false,false,false,false,false,false,false]
+
     // Per-track encoder accumulators for MiniLab relative knobs.
     // Spec §10: encoder accumulation normally done in C++ (Encoder.Offset64).
     // Here we implement it in QML as the Protocols API receives raw bytes.
@@ -179,6 +182,14 @@ Ossia.Mapper {
         if (xlOut) xlOut.sendNoteOn(9, recLedNote(n), _recState[n-1] ? 63 : 0);
     }
 
+    // Read inmix gains for track t from score and update pad LEDs.
+    function updatePadLEDs(t) {
+        for (var g = 0; g < 8; g++) {
+            var val = Device.read(sa(t, "inmix", "gain " + (g+1)));
+            miniLabPadLED(g, val !== null && val !== undefined && val > 0.0);
+        }
+    }
+
     // Refresh all 8 rec LEDs from _recState.
     function sendXLRecLEDs() {
         if (!xlOut) return;
@@ -210,6 +221,8 @@ Ossia.Mapper {
         // Open Granola's MIDI gate only on selected track(s), close all others
         for (var t = 1; t <= 8; t++)
             Device.write("/midi_gate/" + t, _sel[t-1]);
+        // Recall pad LEDs from the newly focused track's inmix state
+        updatePadLEDs(n);
         if (_selMode) {
             if (_sel[n-1]) initTrackFromScore(n);
         } else {
@@ -360,6 +373,8 @@ Ossia.Mapper {
         var d1 = msg.bytes[1];
         var d2 = msg.bytes.length > 2 ? msg.bytes[2] : 0;
 
+
+
         if (st === 0xB0) {
             if (d1 >= 13 && d1 <= 20) {
                 Device.write("/strip/" + (d1-12) + "/gain",       d2 / 64.0);  return;
@@ -425,13 +440,15 @@ Ossia.Mapper {
     // Arturia MiniLab mkII — three channel zones:
     //   Knobs: ch 1 (0-based 0), relative Offset64 mode.
     //   Keyboard: ch 16 (0-based 15).
-    //   Pads: ch 9 (0-based 8), notes 36-43.
+    //   Pads: switched CC ch 10 (0-based 9), CCs 40-47 (127=on, 0=off).
     function handleML(msg) {
         if (!msg || !msg.bytes || msg.bytes.length < 2) return;
         var st = msg.bytes[0] & 0xF0;
         var ch = msg.bytes[0] & 0x0F;
         var d1 = msg.bytes[1];
         var d2 = msg.bytes.length > 2 ? msg.bytes[2] : 0;
+
+
 
         // ── Relative knobs (ch 1 = 0-based 0) ──────────────────────────────
         // Spec §10 Encoder.Offset64 + sensitivity 1/256 (1/32 for gain params).
@@ -492,14 +509,15 @@ Ossia.Mapper {
             return;
         }
 
-        // ── Pads — note-on (some presets) or CC (factory preset, ch 10 = 0-based 9) ──
-        // Max source_select.maxpat uses ctlin ch 10 (1-based) = 0-based 9, CC 36-43.
-        var padSt = (st === 0x90 && ch === 8 && d1 >= 36 && d1 <= 43 && d2 > 0)
-                 || (st === 0xB0 && ch === 9 && d1 >= 36 && d1 <= 43 && d2 > 0);
-        if (padSt) {
-            var padIdx = d1 - 36;
-            for (var p = 0; p < 8; p++) miniLabPadLED(p, p === padIdx);
-            Device.write("/src_sel", padIdx);
+        // ── Pads — switched CC ch 10 (0-based 9) CCs 40-47: d2=127 on, d2=0 off ──
+        // Consume ALL pad messages so they never reach the score's MIDI routing.
+        var isPadCC = st === 0xB0 && ch === 9 && d1 >= 40 && d1 <= 47;
+        if (isPadCC) {
+            var padIdx = d1 - 40;
+            _padState[padIdx] = (d2 > 0);
+            _padState = _padState;
+            miniLabPadLED(padIdx, _padState[padIdx]);
+            Device.write("/src_sel", padIdx * 2 + (_padState[padIdx] ? 1 : 0));
             return;
         }
     }
@@ -609,15 +627,15 @@ Ossia.Mapper {
         }
 
         // ── Source selection write ────────────────────────────────────────────
+        // v.value encodes: padIdx (0-7) in low bits, desired gain value in high bits.
+        // Bit layout: bits 0-2 = padIdx, bits 3+ = gain * 1000 (int-encoded float).
+        // Simpler: v.value = padIdx * 2 + (active ? 1 : 0)
         function srcSelWrite(v) {
-            var srcIdx = v.value;   // 0-7 → gain channel 1-8
+            var srcIdx = Math.floor(v.value / 2);
+            var val    = (v.value % 2 === 1) ? 1.0 : 0.0;
             var sel = _root.getSelected(), acts = [];
-            for (var i = 0; i < sel.length; i++) {
-                var tr = sel[i];
-                for (var g = 1; g <= 8; g++)
-                    acts.push({ address: _sa(tr,"inmix","gain "+g),
-                                value:   g === srcIdx+1 ? 1.0 : 0.0 });
-            }
+            for (var i = 0; i < sel.length; i++)
+                acts.push({ address: _sa(sel[i], "inmix", "gain " + (srcIdx+1)), value: val });
             return acts;
         }
 
@@ -777,6 +795,8 @@ Ossia.Mapper {
                             Device.write("/midi_gate/" + gt, _root._sel[gt-1]);
                         // Seed rec LEDs: all off on startup
                         _root.sendXLRecLEDs();
+                        // Seed pad LEDs from track 1's inmix state
+                        _root.updatePadLEDs(1);
                         _root._initDone = true;
                     }
                     return 0;

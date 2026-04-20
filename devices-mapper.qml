@@ -380,10 +380,9 @@ Ossia.Mapper {
             if (d1 >= 41 && d1 <= 44) { selectTrack(d1-40); return; }
             if (d1 >= 57 && d1 <= 60) { selectTrack(d1-52); return; }
 
-            // Lower row record arm: tracks 1-4 = notes 73-76, tracks 5-6 = notes 89-90
-            // Tracks 7-8 are input-only (trackIn), no recording.
+            // Lower row record arm: tracks 1-4 = notes 73-76, tracks 5-8 = notes 89-92
             if (d1 >= 73 && d1 <= 76) { toggleRec(d1-72); return; }
-            if (d1 >= 89 && d1 <= 90) { toggleRec(d1-84); return; }
+            if (d1 >= 89 && d1 <= 92) { toggleRec(d1-84); return; }
 
             if (d1 === 104) { Device.write("/transport/play", true); return; }
             if (d1 === 105) { Device.write("/transport/stop", true); return; }
@@ -822,7 +821,7 @@ Ossia.Mapper {
             // toggleRec() also sends LED feedback directly via xlOut.
             { name: "rec", children: (function() {
                 var nodes = [];
-                for (var n = 1; n <= 6; n++) {
+                for (var n = 1; n <= 8; n++) {
                     nodes.push((function(tr) {
                         return {
                             name: String(tr), type: Ossia.Type.Bool, value: false,

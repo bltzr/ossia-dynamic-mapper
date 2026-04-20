@@ -71,6 +71,9 @@ Ossia.Mapper {
 
     property bool _initDone: false  // true once startup timer has seeded all tracks
 
+    // Per-track recording state (toggled by XL lower row buttons)
+    property var _recState: [false,false,false,false,false,false,false,false]
+
     // Per-track encoder accumulators for MiniLab relative knobs.
     // Spec §10: encoder accumulation normally done in C++ (Encoder.Offset64).
     // Here we implement it in QML as the Protocols API receives raw bytes.
@@ -163,6 +166,25 @@ Ossia.Mapper {
     // LaunchControl XL Track Focus button note number for track n (1-based).
     // Tracks 1-4: notes 41-44;  tracks 5-8: notes 57-60.
     function xlLedNote(n) { return n <= 4 ? 40 + n : 52 + n; }
+
+    // XL lower row (record arm) note number for track n (1-based).
+    // Tracks 1-4: notes 73-76;  tracks 5-8: notes 89-92.
+    function recLedNote(n) { return n <= 4 ? 72 + n : 84 + n; }
+
+    // Toggle recording for track n and update LED.
+    function toggleRec(n) {
+        _recState[n-1] = !_recState[n-1];
+        _recState = _recState;
+        Device.write("/rec/" + n, _recState[n-1]);
+        if (xlOut) xlOut.sendNoteOn(9, recLedNote(n), _recState[n-1] ? 63 : 0);
+    }
+
+    // Refresh all 8 rec LEDs from _recState.
+    function sendXLRecLEDs() {
+        if (!xlOut) return;
+        for (var t = 1; t <= 8; t++)
+            xlOut.sendNoteOn(9, recLedNote(t), _recState[t-1] ? 63 : 0);
+    }
 
     // Spec §12.1 LedFeedback equivalent: refresh all 8 Track Focus LEDs.
     function sendXLTrackLEDs() {
@@ -257,6 +279,7 @@ Ossia.Mapper {
             onOpen: function(s) {
                 Device.write("/status/xl_out", "open");
                 for (var t = 1; t <= 8; t++) s.sendNoteOn(9, xlLedNote(t), 0);
+                for (var t = 1; t <= 8; t++) s.sendNoteOn(9, recLedNote(t), 0);
                 s.sendNoteOn(9, 106, 0);
                 s.sendNoteOn(9, 107, 0);
                 s.sendNoteOn(9, 108, 0);
@@ -356,6 +379,11 @@ Ossia.Mapper {
         if (st === 0x90 && d2 === 127) {
             if (d1 >= 41 && d1 <= 44) { selectTrack(d1-40); return; }
             if (d1 >= 57 && d1 <= 60) { selectTrack(d1-52); return; }
+
+            // Lower row record arm: tracks 1-4 = notes 73-76, tracks 5-6 = notes 89-90
+            // Tracks 7-8 are input-only (trackIn), no recording.
+            if (d1 >= 73 && d1 <= 76) { toggleRec(d1-72); return; }
+            if (d1 >= 89 && d1 <= 90) { toggleRec(d1-84); return; }
 
             if (d1 === 104) { Device.write("/transport/play", true); return; }
             if (d1 === 105) { Device.write("/transport/stop", true); return; }
@@ -465,9 +493,11 @@ Ossia.Mapper {
             return;
         }
 
-        // ── Pads (ch 9 = 0-based 8, notes 36-43) ────────────────────────────
-        // Spec §12.4 ColorFeedback: exclusive LED, then exclusive inmix routing.
-        if (st === 0x90 && ch === 8 && d1 >= 36 && d1 <= 43 && d2 > 0) {
+        // ── Pads — note-on (some presets) or CC (factory preset, ch 10 = 0-based 9) ──
+        // Max source_select.maxpat uses ctlin ch 10 (1-based) = 0-based 9, CC 36-43.
+        var padSt = (st === 0x90 && ch === 8 && d1 >= 36 && d1 <= 43 && d2 > 0)
+                 || (st === 0xB0 && ch === 9 && d1 >= 36 && d1 <= 43 && d2 > 0);
+        if (padSt) {
             var padIdx = d1 - 36;
             for (var p = 0; p < 8; p++) miniLabPadLED(p, p === padIdx);
             Device.write("/src_sel", padIdx);
@@ -746,6 +776,8 @@ Ossia.Mapper {
                         // Seed MIDI gates: open only for initially selected tracks
                         for (var gt = 1; gt <= 8; gt++)
                             Device.write("/midi_gate/" + gt, _root._sel[gt-1]);
+                        // Seed rec LEDs: all off on startup
+                        _root.sendXLRecLEDs();
                         _root._initDone = true;
                     }
                     return 0;
@@ -783,6 +815,24 @@ Ossia.Mapper {
                     ]});
                 }
                 return tracks;
+            }()) },
+
+            // ── Per-track recording toggle (XL lower row buttons) ────────────
+            // Each node writes to rec/record on its specific track.
+            // toggleRec() also sends LED feedback directly via xlOut.
+            { name: "rec", children: (function() {
+                var nodes = [];
+                for (var n = 1; n <= 6; n++) {
+                    nodes.push((function(tr) {
+                        return {
+                            name: String(tr), type: Ossia.Type.Bool, value: false,
+                            write: function(v) {
+                                return [{ address: _sa(tr, "rec", "record"), value: v.value }];
+                            }
+                        };
+                    })(n));
+                }
+                return nodes;
             }()) },
 
             // ── Granola MIDI gate: open/close per-track MIDI listening ───────

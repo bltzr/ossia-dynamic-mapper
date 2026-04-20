@@ -793,7 +793,7 @@ Ossia.Mapper {
                         return {
                             name: String(tr), type: Ossia.Type.Bool, value: false,
                             write: function(v) {
-                                return [{ address: _sa(tr, "gran", "listening to midi input?"),
+                                return [{ address: _sa(tr, "gran", "midi gate"),
                                           value: v.value }];
                             }
                         };
